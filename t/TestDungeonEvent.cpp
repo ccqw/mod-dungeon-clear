@@ -8,6 +8,7 @@
 #include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
 #include "Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h"
 #include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcDefiasGunpowder.h"
 #include "Ai/Dungeon/DungeonClear/Util/DungeonEventExecutor.h"
 
 namespace
@@ -645,12 +646,234 @@ TEST(DungeonEventRegistryTest, DeadminesCannonEventShape)
     // 2. fire it (Custom -> FireDefiasCannon hook id 2).
     EXPECT_EQ(e->steps[1].kind, EventStepKind::Custom);
     EXPECT_EQ(e->steps[1].hookId, 2u);
+    EXPECT_EQ(e->steps[1].timeoutMs, 30000u);
+    EXPECT_EQ(e->steps[1].timeoutRetries, 2u);  // rewind to step 1, twice, then fail
 
     // 3. hold until the Iron Clad Door opens (GO_STATE_ACTIVE_ALTERNATIVE).
     EXPECT_EQ(e->steps[2].kind, EventStepKind::WaitForGameObjectState);
     EXPECT_EQ(e->steps[2].goEntry, 16397u);
     EXPECT_EQ(e->steps[2].wantState, 2u);
     EXPECT_EQ(e->steps[2].timeoutMs, 30000u);
+}
+
+// Deadmines Defias Cannon, live regression: the Custom step (FireDefiasCannon)
+// returns Running on every path that has not fired the cannon, and the realm
+// logged it "result 0 elapsed 1266400ms timeout 30000ms" for 21 minutes at the
+// Iron Clad Door. Its timeout must rewind the event to the MoveTo onto the
+// cannon and retry, a bounded number of times, and then fail the event.
+TEST(DungeonEventAdvance, DeadminesCannonCustomTimeoutRewindsThenFails)
+{
+    DungeonEvent const* e = DungeonEventRegistry::Find(36, 1);
+    ASSERT_NE(e, nullptr);
+    ASSERT_EQ(e->steps.size(), 3u);
+    ASSERT_EQ(e->steps[0].kind, EventStepKind::MoveTo);
+    ASSERT_EQ(e->steps[1].kind, EventStepKind::Custom);
+
+    constexpr uint32 kDefaultTimeout = 30000;
+    uint32 const timeout = e->steps[1].timeoutMs ? e->steps[1].timeoutMs : kDefaultTimeout;
+
+    // On the Custom step: the MoveTo onto the cannon is already done.
+    uint32 now = 1000;
+    DungeonEventProgress p = Prog(1, 1, now);
+
+    // Inside its timeout the hook's Running holds.
+    EXPECT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Running, now + timeout - 1,
+                                            kDefaultTimeout),
+              EventDriveOutcome::Running);
+    EXPECT_EQ(p.stepIndex, 1u);
+
+    // Past it: rewind to the MoveTo (step 0), not a stall.
+    now += timeout;
+    EXPECT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Running, now, kDefaultTimeout),
+              EventDriveOutcome::Running)
+        << "the first timeout of the cannon step must retry, not stall the run";
+    EXPECT_EQ(p.stepIndex, 0u) << "the retry starts from the MoveTo onto the cannon";
+
+    // Keep the hook stuck: MoveTo re-arrives, the Custom step times out again.
+    // Bounded: the event must fail within a handful of retries, never hold.
+    int rewinds = 1;
+    EventDriveOutcome out = EventDriveOutcome::Running;
+    for (int i = 0; i < 10 && out == EventDriveOutcome::Running; ++i)
+    {
+        now += 1000;
+        ASSERT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Done, now, kDefaultTimeout),
+                  EventDriveOutcome::Running);
+        ASSERT_EQ(p.stepIndex, 1u);
+        now += timeout;
+        out = DungeonEventExecutor::Advance(*e, p, StepResult::Running, now, kDefaultTimeout);
+        if (out == EventDriveOutcome::Running)
+        {
+            EXPECT_EQ(p.stepIndex, 0u);
+            ++rewinds;
+        }
+    }
+    EXPECT_EQ(out, EventDriveOutcome::Stalled)
+        << "once the retries are spent the required event fails (stalls with a reason)";
+    EXPECT_EQ(rewinds, 2) << "two retries from the MoveTo, then the failure";
+    EXPECT_EQ(p.stepIndex, 1u) << "the failure reports the step that timed out";
+
+    // And it stays failed: a later tick does not quietly start another retry.
+    EXPECT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Running, now + 5000,
+                                            kDefaultTimeout),
+              EventDriveOutcome::Stalled);
+}
+
+// The cannon hook logs its Running reason once per change, remembered on the
+// run state. That memory must not outlive the attempt: a retry after a timeout
+// rewind that hits the same reason (still no cast) has to say so again, or the
+// retry is as silent as the 21-minute hold was. Drive clears it whenever
+// BeginsHookAttempt reports a new attempt at the Custom step.
+TEST(DungeonEventAdvance, DeadminesCannonRetryIsANewHookAttempt)
+{
+    DungeonEvent const* e = DungeonEventRegistry::Find(36, 1);
+    ASSERT_NE(e, nullptr);
+    constexpr uint32 kDefaultTimeout = 30000;
+    uint32 const timeout = e->steps[1].timeoutMs;
+
+    uint32 now = 1000;
+    DungeonEventProgress p = Prog(1, 0, now);
+
+    // MoveTo onto the cannon arrives: the first tick on the Custom step is a new
+    // attempt, every later tick of the same attempt is not.
+    now += 500;
+    ASSERT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Done, now, kDefaultTimeout),
+              EventDriveOutcome::Running);
+    ASSERT_EQ(p.stepIndex, 1u);
+    EXPECT_TRUE(DungeonEventExecutor::BeginsHookAttempt(p));
+    EXPECT_FALSE(DungeonEventExecutor::BeginsHookAttempt(p));
+    EXPECT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Running, now + 1000,
+                                            kDefaultTimeout),
+              EventDriveOutcome::Running);
+    EXPECT_FALSE(DungeonEventExecutor::BeginsHookAttempt(p));
+
+    // Timeout -> rewind to the MoveTo -> back onto the Custom step: a new attempt.
+    now += timeout;
+    ASSERT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Running, now, kDefaultTimeout),
+              EventDriveOutcome::Running);
+    ASSERT_EQ(p.stepIndex, 0u);
+    now += 500;
+    ASSERT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Done, now, kDefaultTimeout),
+              EventDriveOutcome::Running);
+    ASSERT_EQ(p.stepIndex, 1u);
+    EXPECT_TRUE(DungeonEventExecutor::BeginsHookAttempt(p))
+        << "the retry must log its reason afresh, not inherit the timed-out attempt's";
+    EXPECT_FALSE(DungeonEventExecutor::BeginsHookAttempt(p));
+
+    // A lone Custom step (no MoveTo, rewinds onto itself at step 0) still counts
+    // as a new attempt: the rewind re-stamps stepStartMs.
+    DungeonEvent lone = EventBuilder(0, 2, "e").Custom(7).Timeout(5000).RetryOnTimeout(1).Build();
+    DungeonEventProgress q = Prog(2, 0, 0);
+    EXPECT_TRUE(DungeonEventExecutor::BeginsHookAttempt(q));
+    ASSERT_EQ(DungeonEventExecutor::Advance(lone, q, StepResult::Running, 5000, 30000),
+              EventDriveOutcome::Running);
+    ASSERT_EQ(q.stepIndex, 0u);
+    EXPECT_TRUE(DungeonEventExecutor::BeginsHookAttempt(q));
+}
+
+TEST(DungeonEventAdvance, DeadminesRefusedCannonUseReportsOnEachBoundedAttempt)
+{
+    using namespace DcDefiasGunpowder;
+
+    DungeonEvent const* e = DungeonEventRegistry::Find(36, 1);
+    ASSERT_NE(e, nullptr);
+    ASSERT_EQ(e->steps[1].kind, EventStepKind::Custom);
+    uint32 const timeout = e->steps[1].timeoutMs;
+    ASSERT_GT(timeout, 0u);
+
+    uint32 now = 1000;
+    DungeonEventProgress p = Prog(e->id, 1, now);
+    std::uint8_t reason = 0;
+    for (uint32 attempt = 0; attempt <= e->steps[1].timeoutRetries; ++attempt)
+    {
+        ASSERT_TRUE(DungeonEventExecutor::BeginsHookAttempt(p));
+        reason = 0;  // Drive clears the hook's last report at each new attempt.
+        std::uint8_t const refused = ReportCode(Action::UseOnCannon, true, reason);
+        EXPECT_NE(refused, reason) << "the refused item use needs a reason line";
+        EXPECT_NE(refused & REPORT_CAST_REFUSED, 0u);
+        reason = refused;
+        EXPECT_EQ(ReportCode(Action::UseOnCannon, true, reason), reason)
+            << "the same refusal on the next tick must not repeat the line";
+
+        EXPECT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Running,
+                                                now + timeout - 1, timeout),
+                  EventDriveOutcome::Running);
+        EXPECT_EQ(p.stepIndex, 1u);
+        EXPECT_FALSE(DungeonEventExecutor::BeginsHookAttempt(p));
+
+        now += timeout;
+        EventDriveOutcome const outcome =
+            DungeonEventExecutor::Advance(*e, p, StepResult::Running, now, timeout);
+        if (attempt == e->steps[1].timeoutRetries)
+        {
+            EXPECT_EQ(outcome, EventDriveOutcome::Stalled);
+            EXPECT_EQ(p.stepIndex, 1u);
+            break;
+        }
+
+        ASSERT_EQ(outcome, EventDriveOutcome::Running);
+        ASSERT_EQ(p.stepIndex, 0u) << "retry must reapproach the cannon";
+        now += 1;
+        ASSERT_EQ(DungeonEventExecutor::Advance(*e, p, StepResult::Done, now, timeout),
+                  EventDriveOutcome::Running);
+        ASSERT_EQ(p.stepIndex, 1u);
+    }
+}
+
+TEST(EventBuilderTest, RetryOnTimeoutTagsOnlyTheStepItFollows)
+{
+    DungeonEvent e = EventBuilder(0, 1, "e")
+                         .MoveTo(1.0f, 2.0f, 3.0f, 5.0f)
+                         .Custom(7)
+                         .Timeout(20000)
+                         .RetryOnTimeout(3)
+                         .WaitForGOState(100, 2, 8000)
+                         .Build();
+    ASSERT_EQ(e.steps.size(), 3u);
+    EXPECT_EQ(e.steps[0].timeoutRetries, 0u);
+    EXPECT_EQ(e.steps[1].timeoutRetries, 3u);
+    EXPECT_EQ(e.steps[1].timeoutMs, 20000u);
+    EXPECT_EQ(e.steps[2].timeoutRetries, 0u);
+}
+
+TEST(DungeonEventAdvance, TimeoutRewindGoesToNearestPrecedingMoveTo)
+{
+    // Two MoveTos ahead of the Custom step: the retry re-walks only the last one,
+    // the leg that actually puts the bot where the hook works.
+    DungeonEvent ev = EventBuilder(0, 1, "e")
+                          .MoveTo(0.0f, 0.0f, 0.0f, 5.0f)
+                          .UseGO(100, 10.0f)
+                          .MoveTo(1.0f, 0.0f, 0.0f, 5.0f)
+                          .Custom(7)
+                          .Timeout(5000)
+                          .RetryOnTimeout(1)
+                          .Build();
+    DungeonEventProgress p = Prog(1, 3, 0);
+    EXPECT_EQ(DungeonEventExecutor::Advance(ev, p, StepResult::Running, 5000, 30000),
+              EventDriveOutcome::Running);
+    EXPECT_EQ(p.stepIndex, 2u);
+    EXPECT_EQ(p.stepStartMs, 5000u);
+
+    // No MoveTo before it at all: the retry restarts the event from step 0.
+    DungeonEvent lone = EventBuilder(0, 2, "e").Custom(7).Timeout(5000).RetryOnTimeout(1).Build();
+    DungeonEventProgress q = Prog(2, 0, 0);
+    EXPECT_EQ(DungeonEventExecutor::Advance(lone, q, StepResult::Running, 5000, 30000),
+              EventDriveOutcome::Running);
+    EXPECT_EQ(q.stepIndex, 0u);
+    EXPECT_EQ(DungeonEventExecutor::Advance(lone, q, StepResult::Running, 10000, 30000),
+              EventDriveOutcome::Stalled);
+}
+
+TEST(DungeonEventAdvance, CustomStepWithoutRetriesStillFailsOnFirstTimeout)
+{
+    // The rewind is opt-in: every other Custom step keeps its old behaviour.
+    DungeonEvent ev = EventBuilder(0, 1, "e")
+                          .MoveTo(0.0f, 0.0f, 0.0f, 5.0f)
+                          .Custom(7)
+                          .Build();
+    DungeonEventProgress p = Prog(1, 1, 0);
+    EXPECT_EQ(DungeonEventExecutor::Advance(ev, p, StepResult::Running, 30000, 30000),
+              EventDriveOutcome::Stalled);
+    EXPECT_EQ(p.stepIndex, 1u);
 }
 
 // Wailing Caverns drop to Lord Serpentis: settle on the lip, then jump the

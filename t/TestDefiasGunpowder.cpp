@@ -5,6 +5,7 @@
 
 #include "gtest/gtest.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -204,6 +205,70 @@ TEST(DcDefiasGunpowder, AnOpenDoorIsDoneWhateverElseIsTrue)
         in.carrier = c;
         EXPECT_EQ(Decide(in).action, Action::Done);
     }
+}
+
+// The step logs why it is Running once per change (ReportCode), not once per
+// tick, and every Running branch has its own code, so the line names the one
+// it is in.
+TEST(DcDefiasGunpowder, EveryBranchHasItsOwnReport)
+{
+    Action const all[] = {Action::Done,          Action::WaitForCast,  Action::WalkToCannon,
+                          Action::UseOnCannon,   Action::WaitForPlayer, Action::TakeFromChest,
+                          Action::WalkToChest,   Action::OpenChest,    Action::NoCannon,
+                          Action::NoChest,       Action::ChestSpent,   Action::NoOpeningSpell};
+    std::vector<std::uint8_t> seen;
+    for (Action a : all)
+    {
+        std::uint8_t const c = ReportCode(a, false, 0);
+        EXPECT_NE(c, 0u) << "0 is 'nothing said yet'";
+        EXPECT_EQ(c & ~REPORT_ACTION_MASK, 0u);
+        for (std::uint8_t s : seen)
+            EXPECT_NE(c, s);
+        seen.push_back(c);
+        // The same branch on the next tick is not news (a second UseOnCannon is
+        // once: see ACastCycleIsOneReportAndARepeatIsAnother).
+        if (a != Action::UseOnCannon)
+            EXPECT_EQ(ReportCode(a, false, c), c) << Describe(a);
+    }
+}
+
+// The cast the step started (the 2s gunpowder use, the chest's Opening) is
+// folded into the action that started it, and a use that ended with the door
+// still shut says so once, then holds.
+TEST(DcDefiasGunpowder, ACastCycleIsOneReportAndARepeatIsAnother)
+{
+    std::uint8_t const use = ReportCode(Action::UseOnCannon, false, 0);
+    EXPECT_EQ(ReportCode(Action::WaitForCast, false, use), use);
+    std::uint8_t const again = ReportCode(Action::UseOnCannon, false, use);
+    EXPECT_NE(again, use) << "the door stayed shut after a cast: say it once";
+    EXPECT_EQ(ReportCode(Action::WaitForCast, false, again), again);
+    EXPECT_EQ(ReportCode(Action::UseOnCannon, false, again), again) << "then hold";
+
+    std::uint8_t const open = ReportCode(Action::OpenChest, false, 0);
+    EXPECT_EQ(ReportCode(Action::WaitForCast, false, open), open);
+
+    // A cast in flight the step did not start is its own report.
+    std::uint8_t const walk = ReportCode(Action::WalkToCannon, false, 0);
+    EXPECT_NE(ReportCode(Action::WaitForCast, false, walk), walk);
+}
+
+// The item use's result is part of the report: a refused cast reads apart from
+// a started one, and after a refusal a cast in flight is not ours.
+TEST(DcDefiasGunpowder, ARefusedCastIsItsOwnReport)
+{
+    std::uint8_t const use = ReportCode(Action::UseOnCannon, false, 0);
+    std::uint8_t const refused = ReportCode(Action::UseOnCannon, true, use);
+    EXPECT_NE(refused, use);
+    EXPECT_NE(refused, ReportCode(Action::UseOnCannon, false, use));
+    EXPECT_EQ(ReportCode(Action::UseOnCannon, true, refused), refused);
+    EXPECT_EQ(ReportCode(Action::UseOnCannon, false, refused), use)
+        << "a cast that starts after refusals is a fresh use, not a repeat";
+    EXPECT_NE(ReportCode(Action::WaitForCast, false, refused), refused);
+
+    std::uint8_t const open = ReportCode(Action::OpenChest, false, 0);
+    EXPECT_NE(ReportCode(Action::OpenChest, true, 0), open);
+    // A refused flag means nothing on an action that casts nothing.
+    EXPECT_EQ(ReportCode(Action::WalkToChest, true, 0), ReportCode(Action::WalkToChest, false, 0));
 }
 
 // --- the module grants nothing ------------------------------------------------

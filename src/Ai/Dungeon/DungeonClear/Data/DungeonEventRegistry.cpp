@@ -119,6 +119,16 @@ EventBuilder& EventBuilder::Timeout(uint32 ms)
     return *this;
 }
 
+// The rewind target (nearest preceding MoveTo, else step 0) is chosen in
+// DungeonEventExecutor::Advance; both cases are pinned by the test
+// DungeonEventAdvance.TimeoutRewindGoesToNearestPrecedingMoveTo.
+EventBuilder& EventBuilder::RetryOnTimeout(uint32 retries)
+{
+    if (!_ev.steps.empty())
+        _ev.steps.back().timeoutRetries = retries;
+    return *this;
+}
+
 EventBuilder& EventBuilder::SkipIfTargetMissing()
 {
     if (!_ev.steps.empty())

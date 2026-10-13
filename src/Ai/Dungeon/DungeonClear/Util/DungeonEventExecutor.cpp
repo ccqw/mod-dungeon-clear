@@ -27,6 +27,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcBossStandDown.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcDoorOpener.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcFormGate.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
 #include "Log.h"
 #include "MotionMaster.h"
@@ -1232,13 +1233,47 @@ EventDriveOutcome DungeonEventExecutor::Advance(DungeonEvent const& ev, DungeonE
         // wrap-safe for an elapsed interval.
         if (!watchdogOwned && timeout > 0 &&
             static_cast<uint32>(nowMs - prog.stepStartMs) >= timeout)
+        {
+            // A step with a rewind budget left goes back to the nearest MoveTo
+            // before it (step 0 if none) and runs again, instead of failing. The
+            // Deadmines cannon hook is why: it returns Running on every path that
+            // has not fired the cannon, and the first timeout stalled the run on
+            // the spot for good (21 minutes live, "result 0" every heartbeat).
+            // Bounded by the per-activation counter, so a rewind loop still ends
+            // in a failure.
+            if (prog.timeoutRewinds < step.timeoutRetries)
+            {
+                uint32 back = 0;
+                for (uint32 i = prog.stepIndex; i-- > 0;)
+                {
+                    if (ev.steps[i].kind == EventStepKind::MoveTo)
+                    {
+                        back = i;
+                        break;
+                    }
+                }
+                ++prog.timeoutRewinds;
+                prog.stepIndex = back;
+                prog.attempts = 0;
+                prog.stepStartMs = nowMs;
+                // The rewind is deliberate and bounded, so it re-bases the
+                // forward-progress watchdog too; otherwise that 3x backstop would
+                // fail the event before the retries it was given could run.
+                prog.progressMs = nowMs;
+                return EventDriveOutcome::Running;
+            }
             result = StepResult::Failed;
+        }
         else
             return EventDriveOutcome::Running;
     }
 
     if (result == StepResult::Done)
     {
+        // timeoutRewinds is deliberately NOT refunded here: the MoveTo a rewind
+        // went back to reports Done and advances like any step, and refunding on
+        // that would make the retry budget endless. Only a fresh activation in
+        // Drive refunds it.
         ++prog.stepIndex;
         prog.attempts = 0;
         prog.stepStartMs = nowMs;
@@ -1259,6 +1294,16 @@ EventDriveOutcome DungeonEventExecutor::Advance(DungeonEvent const& ev, DungeonE
     // Failed (or timed out): required events stall for the human; optional ones
     // skip the rest of the event and let the clear advance.
     return ev.required ? EventDriveOutcome::Stalled : EventDriveOutcome::Skipped;
+}
+
+bool DungeonEventExecutor::BeginsHookAttempt(DungeonEventProgress& prog)
+{
+    int32 const step = static_cast<int32>(prog.stepIndex);
+    if (prog.hookAttemptStep == step && prog.hookAttemptStartMs == prog.stepStartMs)
+        return false;
+    prog.hookAttemptStep = step;
+    prog.hookAttemptStartMs = prog.stepStartMs;
+    return true;
 }
 
 EventDriveOutcome DungeonEventExecutor::Drive(Player* bot, AiObjectContext* context,
@@ -1297,6 +1342,8 @@ EventDriveOutcome DungeonEventExecutor::Drive(Player* bot, AiObjectContext* cont
         prog.stepStartMs = now;
         prog.maxStepIndex = 0;
         prog.progressMs = now;
+        prog.timeoutRewinds = 0;
+        prog.timeoutFailLogged = false;
     }
     // A gap since the last drive means this is a FRESH activation — a new run /
     // re-enter, or the event lapsed (condition went false) and re-fired — NOT a
@@ -1330,6 +1377,10 @@ EventDriveOutcome DungeonEventExecutor::Drive(Player* bot, AiObjectContext* cont
             prog.stepIndex = 0;
             prog.attempts = 0;
             prog.maxStepIndex = 0;
+            // The one place a live event's retry budget is refunded: a real lapse
+            // is a new activation. Advance never refunds it on a step advance.
+            prog.timeoutRewinds = 0;
+            prog.timeoutFailLogged = false;
         }
     }
     prog.lastDriveMs = now;
@@ -1338,6 +1389,12 @@ EventDriveOutcome DungeonEventExecutor::Drive(Player* bot, AiObjectContext* cont
         return EventDriveOutcome::Completed;
 
     EventStep const& active = ev.steps[prog.stepIndex];
+    // A new attempt at a Custom step (first entry, a timeout rewind back onto
+    // it, a lapse) starts with the hook's reason memory cleared, so its first
+    // tick logs why it is Running even when that is the same reason the
+    // timed-out attempt gave, and a stale "our cast" never hides another cast.
+    if (context && active.kind == EventStepKind::Custom && BeginsHookAttempt(prog))
+        DcRun::Of(context).eventHookReason = 0;
     StepResult const result = RunStep(bot, context, active, prog, now);
 
     uint32 const defaultTimeoutMs =
@@ -1393,7 +1450,37 @@ EventDriveOutcome DungeonEventExecutor::Drive(Player* bot, AiObjectContext* cont
         }
     }
 
-    return Advance(ev, prog, result, now, defaultTimeoutMs);
+    uint32 const stepBefore = prog.stepIndex;
+    uint32 const rewindsBefore = prog.timeoutRewinds;
+    EventDriveOutcome const outcome = Advance(ev, prog, result, now, defaultTimeoutMs);
+
+    // A timeout rewind or the failure that ends one is news, not a heartbeat:
+    // say it at INFO, once, so a held event never again reads as "result 0"
+    // with nothing else to go on.
+    if (bot && prog.timeoutRewinds != rewindsBefore)
+        LOG_INFO("playerbots.dungeonclear",
+                 "[DC:{}] event '{}' step {} kind {} timed out ({}ms) -> rewind to step {}, "
+                 "retry {}/{}",
+                 bot->GetName(), ev.name, stepBefore, static_cast<uint32>(active.kind),
+                 active.timeoutMs ? active.timeoutMs : defaultTimeoutMs, prog.stepIndex,
+                 prog.timeoutRewinds, active.timeoutRetries);
+    // `result` is the step's OWN result from RunStep (Advance takes it by
+    // value), not Advance's escalation. Running here plus a terminal outcome is
+    // exactly "the timeout (or the no-progress backstop) failed a step that was
+    // still running"; a step that itself returned Failed is not a timeout and
+    // must not be reported as one.
+    else if (bot && active.timeoutRetries > 0 && !prog.timeoutFailLogged &&
+             result == StepResult::Running &&
+             (outcome == EventDriveOutcome::Stalled || outcome == EventDriveOutcome::Skipped))
+    {
+        prog.timeoutFailLogged = true;
+        LOG_INFO("playerbots.dungeonclear",
+                 "[DC:{}] event '{}' step {} kind {} timed out after {} retries -> event failed",
+                 bot->GetName(), ev.name, stepBefore, static_cast<uint32>(active.kind),
+                 prog.timeoutRewinds);
+    }
+
+    return outcome;
 }
 
 DungeonEvent const* DungeonEventExecutor::FindDueConditionalEvent(Player* bot,

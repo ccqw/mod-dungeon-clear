@@ -148,6 +148,39 @@ namespace DcDefiasGunpowder
                a == Action::NoOpeningSpell || a == Action::WaitForPlayer;
     }
 
+    // The step's "why it is still Running" line is logged once per change, not
+    // once per tick: a live realm held this step Running for 21 minutes with
+    // nothing to say which branch it was in. The hook remembers the last code
+    // it logged (DcRunState::eventHookReason; 0 = nothing said yet, and the
+    // event executor clears it at every new attempt at the step) and logs when
+    // ReportCode answers something else.
+    //
+    // The code is 1 + the Action, with two flags for the casts the step starts:
+    constexpr std::uint8_t REPORT_ACTION_MASK = 0x3F;
+    constexpr std::uint8_t REPORT_CAST_REFUSED = 0x40;  // UseOnCannon / OpenChest started no cast
+    constexpr std::uint8_t REPORT_CAST_AGAIN   = 0x80;  // UseOnCannon again: the last use's
+                                                        // cast ended with the door still shut
+
+    inline std::uint8_t ReportCode(Action a, bool castRefused, std::uint8_t last)
+    {
+        std::uint8_t const code = static_cast<std::uint8_t>(static_cast<std::uint8_t>(a) + 1);
+        std::uint8_t const lastAction = last & REPORT_ACTION_MASK;
+        bool const lastCastStarted =
+            !(last & REPORT_CAST_REFUSED) &&
+            (lastAction == static_cast<std::uint8_t>(static_cast<std::uint8_t>(Action::UseOnCannon) + 1) ||
+             lastAction == static_cast<std::uint8_t>(static_cast<std::uint8_t>(Action::OpenChest) + 1));
+        bool const casts = a == Action::UseOnCannon || a == Action::OpenChest;
+
+        // The cast this step just started is that action's own wait, not news.
+        if (a == Action::WaitForCast && lastCastStarted)
+            return last;
+        if (casts && castRefused)
+            return code | REPORT_CAST_REFUSED;
+        if (a == Action::UseOnCannon && lastCastStarted && lastAction == code)
+            return code | REPORT_CAST_AGAIN;
+        return code;
+    }
+
     inline char const* Describe(Action a)
     {
         switch (a)

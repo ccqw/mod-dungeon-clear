@@ -164,12 +164,24 @@ namespace
     // (DeadminesEvents, which sets StepsOwnMovement so the at-objective hold does
     // not cancel the walk to the chest). Returns Running throughout; the event's
     // door-state gate is what confirms the open and advances.
-    void DmLogWait(Player* bot, AiObjectContext* context, DcDefiasGunpowder::Action a)
+    //
+    // Every Running branch says which one it is, once per change: a live realm
+    // logged this step Running for 21 minutes with nothing to say whether the
+    // cannon was out of range, a cast was stuck in flight, or the item use never
+    // started a cast at all. The last code said lives on the bot's run state
+    // (DcRunState::eventHookReason, cleared by the executor at each new attempt
+    // at the step); DcDefiasGunpowder::ReportCode picks the code.
+    bool DmReportChanged(AiObjectContext* context, DcDefiasGunpowder::Action a,
+                         bool castRefused = false)
     {
-        if (DcRun::Of(context).Throttled(DcThrottle::DmGunpowderLog, 5000))
-            return;
-        LOG_INFO("playerbots.dungeonclear", "[DC:{}] Deadmines cannon: {}", bot->GetName(),
-                 DcDefiasGunpowder::Describe(a));
+        if (!context)
+            return true;
+        uint8& last = DcRun::Of(context).eventHookReason;
+        uint8 const code = DcDefiasGunpowder::ReportCode(a, castRefused, last);
+        if (code == last)
+            return false;
+        last = code;
+        return true;
     }
 
     // Walk `who` to a point, without re-issuing the same point every tick (a
@@ -317,12 +329,31 @@ namespace
         switch (plan.action)
         {
             case Action::Done:
+                if (DmReportChanged(context, plan.action))
+                    LOG_INFO("playerbots.dungeonclear", "[DC:{}] Deadmines cannon: {} -> done",
+                             bot->GetName(), Describe(plan.action));
                 return ObjectiveArriveResult::Done;
 
             case Action::WaitForCast:
+                // Folded into the action when it is the cast the step started.
+                if (DmReportChanged(context, plan.action))
+                {
+                    Spell* cur = actor->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                    if (!cur)
+                        cur = actor->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+                    LOG_INFO("playerbots.dungeonclear",
+                             "[DC:{}] Deadmines cannon: running, {} ({} casting spell {})",
+                             bot->GetName(), Describe(plan.action), actor->GetName(),
+                             cur ? cur->GetSpellInfo()->Id : 0u);
+                }
                 return ObjectiveArriveResult::Running;
 
             case Action::WalkToCannon:
+                if (DmReportChanged(context, plan.action))
+                    LOG_INFO("playerbots.dungeonclear",
+                             "[DC:{}] Deadmines cannon: running, {} ({}, {:.1f}yd)",
+                             bot->GetName(), Describe(plan.action), actor->GetName(),
+                             actor->GetExactDist(cannon));
                 DmWalkTo(actor, cannon->GetPositionX(), cannon->GetPositionY(),
                          cannon->GetPositionZ());
                 return ObjectiveArriveResult::Running;
@@ -338,13 +369,34 @@ namespace
                 SpellCastTargets targets;
                 targets.SetGOTarget(cannon);
                 actor->CastItemUseSpell(gunpowder, targets, 0, 0);
-                // Re-tried every tick until the door opens, so a cast that keeps
-                // failing must not write a line per tick.
-                if (!DcRun::Of(context).Throttled(DcThrottle::DmGunpowderLog, 5000))
+
+                // CastItemUseSpell returns nothing; its result is whether a cast
+                // is now running. A refused cast (lock, form, range, item) leaves
+                // none. Re-tried every tick until the door opens, so the line is
+                // written once per change, not once per try.
+                Spell* cast = actor->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                uint32 const castId = cast ? cast->GetSpellInfo()->Id : 0u;
+                if (DmReportChanged(context, plan.action, /*castRefused*/ !cast))
+                {
+                    uint8 const code = context ? DcRun::Of(context).eventHookReason : 0;
                     LOG_INFO("playerbots.dungeonclear",
-                             "[DC:{}] Deadmines cannon: {} uses the Defias Gunpowder on the "
-                             "cannon ({:.1f}yd)",
-                             bot->GetName(), actor->GetName(), actor->GetExactDist(cannon));
+                             "[DC:{}] Deadmines cannon: running, {} uses the Defias Gunpowder "
+                             "on the cannon ({:.1f}yd): {} (cast spell {}, CanUseItem {}, "
+                             "form {}, door still shut)",
+                             bot->GetName(), actor->GetName(), actor->GetExactDist(cannon),
+                             !cast                           ? "no cast started"
+                             : (code & REPORT_CAST_AGAIN) ? "previous cast ended, cast again"
+                                                             : "cast started",
+                             castId, static_cast<uint32>(actor->CanUseItem(gunpowder)),
+                             static_cast<uint32>(actor->GetShapeshiftForm()));
+                }
+                // Running on a refused cast too, on purpose. The refusals seen
+                // are transient (the form drop above lands this tick, a carrier
+                // still closing to range), so failing here would end the event on
+                // the first one; Blocked would stall it with no retry at all. The
+                // refusal is logged above, and the step's Timeout + RetryOnTimeout
+                // bound it: a refused attempt walks back onto the cannon and then
+                // fails the event.
                 return ObjectiveArriveResult::Running;  // door-state gate confirms it
             }
 
@@ -362,12 +414,13 @@ namespace
                     bot->GetSession()->HandleAutostoreLootItemOpcode(take);
                 }
                 bool const got = bot->HasItemCount(ITEM_GUNPOWDER, 1);
-                LOG_INFO("playerbots.dungeonclear",
-                         "[DC:{}] Deadmines cannon: looted the Defias Gunpowder chest ({})",
-                         bot->GetName(),
-                         got ? "took the gunpowder"
-                             : (slot < 0 ? "it held no gunpowder for us"
-                                         : "the gunpowder did not fit in the bags"));
+                if (DmReportChanged(context, plan.action))
+                    LOG_INFO("playerbots.dungeonclear",
+                             "[DC:{}] Deadmines cannon: looted the Defias Gunpowder chest ({})",
+                             bot->GetName(),
+                             got ? "took the gunpowder"
+                                 : (slot < 0 ? "it held no gunpowder for us"
+                                             : "the gunpowder did not fit in the bags"));
                 WorldPacket release(CMSG_LOOT_RELEASE, 8);
                 release << lootGuid;
                 bot->GetSession()->HandleLootReleaseOpcode(release);
@@ -375,6 +428,10 @@ namespace
             }
 
             case Action::WalkToChest:
+                if (DmReportChanged(context, plan.action))
+                    LOG_INFO("playerbots.dungeonclear",
+                             "[DC:{}] Deadmines cannon: running, {} ({:.1f}yd)", bot->GetName(),
+                             Describe(plan.action), bot->GetExactDist(chest));
                 DmWalkTo(bot, chest->GetPositionX(), chest->GetPositionY(), chest->GetPositionZ());
                 return ObjectiveArriveResult::Running;
 
@@ -391,12 +448,12 @@ namespace
                         info->CheckShapeshift(uint32(bot->GetShapeshiftForm())) != SPELL_CAST_OK)
                         bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
                 SpellCastResult const res = bot->CastSpell(chest, openSpell, false);
-                // A refused cast is re-tried next tick; say so only now and then.
-                if (res == SPELL_CAST_OK ||
-                    !DcRun::Of(context).Throttled(DcThrottle::DmGunpowderLog, 5000))
+                // A refused cast is re-tried next tick; the line is written once
+                // per change, not once per try.
+                if (DmReportChanged(context, plan.action, /*castRefused*/ res != SPELL_CAST_OK))
                     LOG_INFO("playerbots.dungeonclear",
-                             "[DC:{}] Deadmines cannon: opening the Defias Gunpowder chest "
-                             "with spell {} (result {})",
+                             "[DC:{}] Deadmines cannon: running, opening the Defias Gunpowder "
+                             "chest with spell {} (result {})",
                              bot->GetName(), openSpell, uint32(res));
                 return ObjectiveArriveResult::Running;
             }
@@ -406,7 +463,9 @@ namespace
             case Action::ChestSpent:
             case Action::NoOpeningSpell:
             case Action::WaitForPlayer:
-                DmLogWait(bot, context, plan.action);
+                if (DmReportChanged(context, plan.action))
+                    LOG_INFO("playerbots.dungeonclear", "[DC:{}] Deadmines cannon: running, {}",
+                             bot->GetName(), Describe(plan.action));
                 return ObjectiveArriveResult::Running;
         }
         return ObjectiveArriveResult::Running;

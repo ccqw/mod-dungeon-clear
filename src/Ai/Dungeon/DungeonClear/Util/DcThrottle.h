@@ -65,7 +65,6 @@ enum class DcThrottle : uint8
     RezManaWaitLog,      // DungeonClearRezPartyAction — waiting on mana to afford the rez
     UpHarpoonLog,        // the Utgarde Pinnacle harpoon driver's telemetry line
     UpHarpoonMissingLog, // "in the pocket, and launcher 192175 is not there"
-    DmGunpowderLog,      // the Deadmines cannon step's "why it is waiting" line
     OhBombsLog,          // "no Pack of Incendiary Bombs" (Old Hillsbrad hook 3)
 
     // --- action floors (time only) -----------------------------------------
