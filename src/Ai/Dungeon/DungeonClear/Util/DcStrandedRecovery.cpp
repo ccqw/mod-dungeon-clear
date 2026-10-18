@@ -16,6 +16,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcPullPlanner.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRunProgress.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcSameInstance.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcStatusPublisher.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcStrandedDecision.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
@@ -69,9 +70,15 @@ namespace
             DcStrandedDecision::Member m;
             m.isBot = GET_PLAYERBOT_AI(member) != nullptr;
             m.isAlive = member->IsAlive();
-            m.onMap = member->GetMapId() == anchor->GetMapId();
+            // Same Map OBJECT. A member in another copy of this dungeon shares the
+            // map id, so the old compare marked it "here", let the kernel elect it
+            // as a stray, and Recover() below then teleported a Player owned by a
+            // different map-update thread. See DcSameInstance.h.
+            m.onMap = DcSameInstance(member, anchor);
             m.isTank = member == anchor;
-            m.distToTank = anchor->GetDistance(member);
+            // Only meaningful within one map; a cross-instance reading is noise the
+            // kernel must never act on, and m.onMap is what stops it.
+            m.distToTank = m.onMap ? anchor->GetDistance(member) : 0.0f;
             out.push_back(m);
         }
     }
@@ -248,10 +255,12 @@ namespace DcStrandedRecovery
                 continue;
             if (!member->IsInWorld() || !member->IsAlive())
                 continue;                       // dead members are the rez recovery's job
-            if (member->GetMapId() != leader->GetMapId())
-                continue;
+            if (!DcSameInstance(member, leader))
+                continue;                       // another instance copy: not ours to move
             if (!GET_PLAYERBOT_AI(member))       // bots only, never a human
                 continue;
+            if (member->IsBeingTeleported())
+                continue;                       // a transfer already owns this member
             float const strandedDist = leader->GetDistance(member);
             if (strandedDist <= maxSpread)
                 continue;                       // in range — not stranded
