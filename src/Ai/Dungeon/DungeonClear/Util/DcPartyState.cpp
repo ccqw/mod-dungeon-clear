@@ -64,6 +64,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcLeaderSignal.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRezRecovery.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcSameInstance.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcSmartRest.h"
 #include "Ai/Dungeon/DungeonClear/Util/DungeonPathFollower.h"
 #include "Ai/Dungeon/DungeonClear/Util/NavmeshSnap.h"
@@ -145,7 +146,7 @@ float DcPartyState::HealerManaPct(Player* bot)
     for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
     {
         Player* m = ref->GetSource();
-        if (!m || !m->IsAlive() || m->GetMapId() != bot->GetMapId() || !GatesOnMana(m))
+        if (!m || !m->IsAlive() || !DcSameInstance(m, bot) || !GatesOnMana(m))
             continue;
         DcRestFloorDecision::HealerCandidate c;
         c.seatedHealer = IsSeatedHealer(m);
@@ -215,7 +216,7 @@ namespace
             for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
             {
                 Player* member = ref->GetSource();
-                if (!member || member->GetMapId() != bot->GetMapId() || member->isDead())
+                if (!member || !DcSameInstance(member, bot) || member->isDead())
                     continue;
                 int const level = static_cast<int>(member->GetLevel());
                 if (lowest == 0 || level < lowest)
@@ -315,8 +316,8 @@ bool PartyReadyImpl(Player* bot, float minHpPct, float minMpPct, float maxSpread
         Player* member = ref->GetSource();
         if (!member)
             continue;
-        if (member->GetMapId() != bot->GetMapId())
-            continue;
+        if (!DcSameInstance(member, bot))
+            continue;   // another copy of this dungeon is not "here": see DcSameInstance.h
         if (member->isDead())
             continue;  // Dead members hold the run via DcRezRecovery::IsPending
                        // (or, with PostCombatRez off / recovery unviable, the
@@ -644,7 +645,7 @@ bool DcPartyState::HasDeadSameMapMember(Player* bot)
     for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
     {
         Player* member = ref->GetSource();
-        if (member && member->GetMapId() == bot->GetMapId() && member->isDead())
+        if (member && DcSameInstance(member, bot) && member->isDead())
             return true;
     }
     return false;
@@ -665,7 +666,7 @@ bool DcPartyState::IsAnyPartyMemberLooting(Player* bot)
             continue;
         if (!member->IsAlive())
             continue;
-        if (member->GetMapId() != bot->GetMapId())
+        if (!DcSameInstance(member, bot))
             continue;
 
         // Only bot members loot under our coordination; a real player has no
@@ -688,6 +689,74 @@ namespace
                                      float maxTankGap, DcRestFloorDecision::Risk const* risk);
 }
 
+DcPartyState::PartyPresence DcPartyState::GetPartyPresence(Player* bot)
+{
+    PartyPresence out;
+    if (!bot)
+        return out;
+
+    // The leader itself is always present by definition; count it first so a solo
+    // tank (no group) reports a consistent 1/1 rather than 0/0.
+    if (bot->IsAlive())
+    {
+        ++out.presentAlive;
+        ++out.rosterAlive;
+        if (PlayerbotAI::IsHeal(bot))
+        {
+            out.presentHasHealer = true;
+            out.rosterHasHealer = true;
+        }
+    }
+
+    Group* group = bot->GetGroup();
+    if (!group)
+        return out;
+
+    // Keep the reason line short, exactly like DescribePartyNotReady.
+    constexpr size_t MAX_NAMED = 3;
+    std::vector<std::string> absent;
+    size_t extra = 0;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member || member == bot)
+            continue;
+        if (!member->IsInWorld() || !member->IsAlive())
+            continue;
+
+        ++out.rosterAlive;
+        bool const heals = PlayerbotAI::IsHeal(member);
+        if (heals)
+            out.rosterHasHealer = true;
+
+        // The one test that matters, and the one the readiness gate now uses:
+        // the same Map OBJECT, not merely the same map id. See DcSameInstance.h.
+        if (DcSameInstance(member, bot))
+        {
+            ++out.presentAlive;
+            if (heals)
+                out.presentHasHealer = true;
+            continue;
+        }
+
+        if (absent.size() < MAX_NAMED)
+            absent.push_back(member->GetName());
+        else
+            ++extra;
+    }
+
+    for (size_t i = 0; i < absent.size(); ++i)
+    {
+        if (i)
+            out.absentNames += ", ";
+        out.absentNames += absent[i];
+    }
+    if (extra)
+        out.absentNames += " +" + std::to_string(extra) + " more";
+
+    return out;
+}
 std::string DcPartyState::DescribePartyNotReady(Player* bot,
                                                     float minHpPct, float minMpPct,
                                                     float maxSpread,
@@ -728,8 +797,8 @@ std::string DescribeNotReadyImpl(Player* bot, float minHpPct, float minMpPct,
         Player* member = ref->GetSource();
         if (!member)
             continue;
-        if (member->GetMapId() != bot->GetMapId())
-            continue;
+        if (!DcSameInstance(member, bot))
+            continue;   // a member in another instance can never satisfy this gate
         if (member->isDead())
             continue;  // Dead members are the rez recovery's to report, not a
                        // readiness reason (mirrors IsPartyReady's skip).
@@ -812,7 +881,7 @@ std::string DcPartyState::DescribePartyLooting(Player* bot)
             continue;
         if (!member->IsAlive())
             continue;
-        if (member->GetMapId() != bot->GetMapId())
+        if (!DcSameInstance(member, bot))
             continue;
 
         PlayerbotAI* memberAI = GET_PLAYERBOT_AI(member);
