@@ -9,9 +9,9 @@
 # The defaults are the standard playerbots core + module.
 env:
   CORE_REPO: mod-playerbots/azerothcore-wotlk   # playerbots core fork
-  CORE_REF: Playerbot
-  PLAYERBOTS_REPO: mod-playerbots/mod-playerbots
-  PLAYERBOTS_REF: master
+  CORE_REF: 7f12e89ee5f467a50e62eba1d525eac7dc953d03
+  PLAYERBOTS_REPO: quadseven/mod-playerbots
+  PLAYERBOTS_REF: 7a593fa254840221f1d63b7beb8d9735e55309ba
   # ccache is the whole game: a warm cache turns the ~1h cold build into mostly
   # cache hits. Pin CCACHE_DIR so it matches the cache action's path exactly
   # (ccache 4.x on ubuntu-22.04 otherwise defaults to ~/.cache/ccache, which is

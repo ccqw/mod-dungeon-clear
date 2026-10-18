@@ -115,6 +115,28 @@ public:
     {
         WorldObject::SetMap(map);
     }
+
+    // Put this player on a DIFFERENT Map object (another copy of the same
+    // dungeon). SetMap refuses a second map without a ResetMap first.
+    void MoveToTestMap(Map* map)
+    {
+        WorldObject::ResetMap();
+        WorldObject::SetMap(map);
+    }
+
+    // A groupmate standing on the leader's map is always in the world, and the
+    // party walks (DcSameInstance) refuse one that is not: WorldObject::GetMap
+    // asserts on a player mid-removal. Flip only Object's own flag here; the
+    // full Player::AddToWorld would register with the map grid, which the test
+    // map does not have. Call it after the scenario's value writes: a value
+    // write while in world queues an update on the map.
+    void SetTestInWorld(bool inWorld)
+    {
+        if (inWorld)
+            Object::AddToWorld();
+        else
+            Object::RemoveFromWorld();
+    }
 };
 
 template <class T>
@@ -355,6 +377,8 @@ protected:
 
     void TearDown() override
     {
+        LeaveWorld();
+
         // Delete the group (unlinks members automatically)
         delete group;
 
@@ -369,6 +393,23 @@ protected:
         DungeonClearTestBase::TearDown();
     }
 
+    // The whole party enters / leaves the world (see TestPlayer::SetTestInWorld).
+    void EnterWorld()
+    {
+        player->SetTestInWorld(true);
+        for (TestPlayer* m : members)
+            m->SetTestInWorld(true);
+    }
+
+    void LeaveWorld()
+    {
+        if (player)
+            player->SetTestInWorld(false);
+        for (TestPlayer* m : members)
+            if (m)
+                m->SetTestInWorld(false);
+    }
+
     WorldSession* session = nullptr;
     TestPlayer* player = nullptr;
 
@@ -381,6 +422,7 @@ protected:
 // 1. Group is completely ready
 TEST_F(DungeonClearGroupTest, GroupReadyScenario)
 {
+    EnterWorld();
     EXPECT_TRUE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
     EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f), "");
 }
@@ -389,6 +431,7 @@ TEST_F(DungeonClearGroupTest, GroupReadyScenario)
 TEST_F(DungeonClearGroupTest, GroupNotReadyHPScenario)
 {
     members[0]->SetUInt32Value(UNIT_FIELD_HEALTH, 50); // 50% HP
+    EnterWorld();
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
     EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f), "Waiting on Member1 (low HP)");
 }
@@ -397,6 +440,7 @@ TEST_F(DungeonClearGroupTest, GroupNotReadyHPScenario)
 TEST_F(DungeonClearGroupTest, GroupNotReadyManaScenario)
 {
     members[1]->SetPower(POWER_MANA, 30); // 30% mana
+    EnterWorld();
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
     EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f), "Waiting on Member2 (low mana)");
 }
@@ -405,6 +449,7 @@ TEST_F(DungeonClearGroupTest, GroupNotReadyManaScenario)
 TEST_F(DungeonClearGroupTest, GroupNotReadyDistanceScenario)
 {
     members[2]->Relocate(50.0f, 0.0f, 0.0f); // 50yd away
+    EnterWorld();
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
     EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f), "Waiting on Member3 (out of range)");
 }
@@ -415,7 +460,7 @@ TEST_F(DungeonClearGroupTest, GroupMultipleIssuesScenario)
     members[0]->SetUInt32Value(UNIT_FIELD_HEALTH, 50); // low HP
     members[1]->SetPower(POWER_MANA, 30); // low mana
     members[2]->Relocate(50.0f, 0.0f, 0.0f); // out of range
-
+    EnterWorld();
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
     
     // GroupReference iterates in LIFO order: Member3, Member2, Member1
@@ -431,7 +476,7 @@ TEST_F(DungeonClearGroupTest, GroupCollapseIssuesScenario)
     members[1]->SetPower(POWER_MANA, 30); // low mana
     members[2]->Relocate(50.0f, 0.0f, 0.0f); // out of range
     members[3]->SetUInt32Value(UNIT_FIELD_HEALTH, 50); // low HP
-
+    EnterWorld();
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
     
     // MAX_NAMED is 3. In LIFO order: Member4, Member3, Member2 are named, and Member1 collapses to "+1 more"
@@ -450,6 +495,7 @@ TEST_F(DungeonClearGroupTest, GroupSpreadAnchoredAtCampScenario)
     for (int i = 0; i < 4; ++i)
         members[i]->Relocate(50.0f + 0.5f * (i + 1), 0.0f, 0.0f);
 
+    EnterWorld();
     // Tank-anchored: every member is ~50yd out -> the old permanent "catch up".
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
 
@@ -465,7 +511,7 @@ TEST_F(DungeonClearGroupTest, GroupSpreadAnchoredStragglerScenario)
     for (int i = 0; i < 4; ++i)
         members[i]->Relocate(50.0f + 0.5f * (i + 1), 0.0f, 0.0f);
     members[2]->Relocate(100.0f, 0.0f, 0.0f);  // 50yd past the camp
-
+    EnterWorld();
     EXPECT_FALSE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f, &camp));
     EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f, &camp),
               "Waiting on Member3 (out of range)");
@@ -484,6 +530,7 @@ TEST_F(DungeonClearGroupTest, GroupSpreadAnchoredStaleCampTankGapScenario)
         members[i]->Relocate(1.0f + 0.5f * (i + 1), 0.0f, 0.0f);
     player->Relocate(80.0f, 0.0f, 0.0f);
 
+    EnterWorld();
     // Anchored spread alone: the party is "set at camp" -> passes, the runaway.
     EXPECT_TRUE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f, &camp));
     // With the backstop the 77yd+ real gap trips the gate...
@@ -496,6 +543,40 @@ TEST_F(DungeonClearGroupTest, GroupSpreadAnchoredStaleCampTankGapScenario)
     // Tank back inside the cap: ready again (members still set at the camp).
     player->Relocate(40.0f, 0.0f, 0.0f);
     EXPECT_TRUE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f, &camp, 60.0f));
+}
+
+// 10. A member who left the run and came back in ANOTHER COPY of the same
+// dungeon (same map id, different Map object: their own client logged in and
+// loaded the character from its saved position, mod-overseer#523). The tank
+// used to wait on them forever, "waiting on Member3 (out of range)", because a
+// map-id compare called them present. They are not here and can never arrive,
+// so the readiness gate must not count them.
+TEST_F(DungeonClearGroupTest, GroupMemberInAnotherCopyIsNotWaitedOn)
+{
+    TestMap otherCopy;
+    members[2]->MoveToTestMap(&otherCopy);
+    members[2]->SetMapId(1);                     // same dungeon id as the tank
+    members[2]->Relocate(500.0f, 0.0f, 0.0f);    // far away, in their own copy
+    EnterWorld();
+
+    EXPECT_TRUE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
+    EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f), "");
+
+    // Leave the other copy before it is destroyed.
+    LeaveWorld();
+    members[2]->MoveToTestMap(testMap);
+}
+
+// 11. A member who is not in the world (mid-teleport or being logged out) is
+// not "here" either, and the walk must not touch its Map at all.
+TEST_F(DungeonClearGroupTest, GroupMemberOutOfWorldIsNotWaitedOn)
+{
+    members[1]->Relocate(500.0f, 0.0f, 0.0f);
+    EnterWorld();
+    members[1]->SetTestInWorld(false);
+
+    EXPECT_TRUE(DcPartyState::IsPartyReady(player, 90.0f, 75.0f, 30.0f));
+    EXPECT_EQ(DcPartyState::DescribePartyNotReady(player, 90.0f, 75.0f, 30.0f), "");
 }
 
 class DungeonClearStatusTest : public DungeonClearTestBase
