@@ -24,7 +24,8 @@
 // This kernel answers, from a plain snapshot, what the step does this tick.
 // There is deliberately no answer that creates the item: when the chest is
 // gone or empty, or nobody can open it, the step says why and keeps waiting,
-// and the event's step timeout ends it.
+// and the event's step timeout ends it. A dead carrier is different: recovery
+// pauses the timeout until the member is back on their feet.
 //
 // WHY OPENING THE CHEST WAS NOT ENOUGH. The Opening cast (spell 3365) has a 1s
 // cast time, so its loot window opens inside the core's spell update, never
@@ -71,6 +72,11 @@ namespace DcDefiasGunpowder
         Self,        // the bot running the hook
         PartyBot,    // another bot in the party: it is walked to the cannon
         PartyHuman,  // a player (or a self-bot): they use it themselves
+        Dead,        // a party member holding item 5397 is dead: the gunpowder
+                     // is on their corpse, and the chest is spent by then. A
+                     // named, recoverable hold: the step reports why it waits
+                     // instead of timing out into the no-progress watchdog,
+                     // and resumes the moment they are back on their feet.
     };
 
     // The nearest GO 17155 in the event area.
@@ -115,7 +121,8 @@ namespace DcDefiasGunpowder
         WalkToChest,     // the bot walks to GO 17155
         OpenChest,       // the bot casts its Opening spell on GO 17155
         // Reports. Each holds the step (Running) and says why; none of them
-        // grants anything, and the event's step timeout bounds the wait.
+        // grants anything. The event's step timeout bounds these waits, except
+        // CarrierDead, which pauses the clock for resurrection.
         NoCannon,        // GO 16398 is not in range yet
         NoChest,         // no GO 17155 in the event area
         ChestSpent,      // GO 17155 is there, but its gunpowder is gone
@@ -128,6 +135,10 @@ namespace DcDefiasGunpowder
         // Appended, so the report codes of the actions above do not move.
         NoEligibleOpener,  // no out-of-combat non-healer to send: everyone is fighting,
                            // or only healers are free (a report)
+        // Appended, so the report codes of the actions above do not move.
+        CarrierDead,  // the Defias Gunpowder is on a dead carrier and the chest is
+                      // spent: nobody can loot another one, so the step holds on a
+                      // named report until they are back on their feet (a report)
     };
 
     struct Plan
@@ -142,6 +153,14 @@ namespace DcDefiasGunpowder
         // second fire would summon two more Squallshapers.
         if (in.doorOpen)
             return {Action::Done, 0};
+
+        // The carrier died holding the gunpowder: the chest is spent by then,
+        // so nobody can loot another one. Hold on a named report instead of
+        // timing out into the no-progress watchdog; the step recovers the
+        // moment they are back on their feet, when the carrier is found alive
+        // and the plan walks them to the cannon again.
+        if (in.carrier == Carrier::Dead)
+            return {Action::CarrierDead, GO_CANNON};
 
         if (in.carrier == Carrier::PartyHuman)
             return {Action::WaitForPlayer, GO_CANNON};
@@ -225,7 +244,7 @@ namespace DcDefiasGunpowder
         return a == Action::NoCannon || a == Action::NoChest || a == Action::ChestSpent ||
                a == Action::NoOpeningSpell || a == Action::OpeningNoLoot ||
                a == Action::WaitForPlayer || a == Action::NoBagRoom ||
-               a == Action::NoEligibleOpener;
+               a == Action::NoEligibleOpener || a == Action::CarrierDead;
     }
 
     // The step's "why it is still Running" line is logged once per change, not
@@ -243,7 +262,7 @@ namespace DcDefiasGunpowder
                                                         // ReopenChest started no cast
     constexpr std::uint8_t REPORT_CAST_AGAIN   = 0x80;  // UseOnCannon again: the last use's
                                                         // cast ended with the door still shut
-    static_assert(static_cast<std::uint8_t>(Action::NoBagRoom) + 1 <= REPORT_ACTION_MASK,
+    static_assert(static_cast<std::uint8_t>(Action::CarrierDead) + 1 <= REPORT_ACTION_MASK,
                   "every action's report code must fit under REPORT_ACTION_MASK");
 
     inline std::uint8_t ReportCode(Action a, bool castRefused, std::uint8_t last)
@@ -309,6 +328,7 @@ namespace DcDefiasGunpowder
             case Action::ReopenChest:    return "opening the Defias Gunpowder chest again and taking the gunpowder from it";
             case Action::NoBagRoom:      return "no party bot has room in its bags for the Defias Gunpowder";
             case Action::NoEligibleOpener: return "no out-of-combat non-healer can open the Defias Gunpowder chest";
+            case Action::CarrierDead: return "the Defias Gunpowder is on a dead carrier; the step resumes when they are back on their feet";
         }
         return "?";
     }
