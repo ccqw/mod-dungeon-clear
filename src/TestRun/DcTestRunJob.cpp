@@ -52,6 +52,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
 #include "TestRun/DcDiagSnapshot.h"
 #include "TestRun/DcTestComp.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -233,8 +234,8 @@ std::unique_ptr<DcTestRunJob> DcTestRunJob::Create(Player* gm, DcTestDungeonRegi
     // Resolve the gear ceiling against the conf once, here: a run that took 40
     // minutes must be reproducible from its record even if somebody reloaded
     // the config while it was in the dungeon.
-    job->_gear = DcTestGearTiers::Resolve(gear, sPlayerbotAIConfig.autoGearScoreLimit,
-                                          sPlayerbotAIConfig.autoGearQualityLimit);
+    job->_gear = DcTestGearTiers::Resolve(gear, DcPbConfig::AutoGearScoreLimit(),
+                                          DcPbConfig::AutoGearQualityLimit());
     job->_record.gearIlvl = job->_gear.ilvl;
     job->_record.gearQuality = job->_gear.quality;
 
@@ -1315,7 +1316,7 @@ void DcTestRunJob::TickStarting()
         // when AiPlayerbot.ApplyInstanceStrategies is on. A raid run with the
         // knob off would test nothing but bots auto-attacking a raid boss —
         // fail loudly at start instead of 40 minutes later.
-        if (IsRaidMap() && !sPlayerbotAIConfig.applyInstanceStrategies)
+        if (IsRaidMap() && !DcPbConfig::ApplyInstanceStrategies())
         {
             FailSetup("AiPlayerbot.ApplyInstanceStrategies is off — raid runs need the "
                       "playerbots raid strategies to fight bosses; enable it and retry");

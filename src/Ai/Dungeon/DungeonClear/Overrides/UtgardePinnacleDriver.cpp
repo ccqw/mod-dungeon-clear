@@ -32,6 +32,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcSuppressionTransit.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcThrottle.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 // --- Utgarde Pinnacle (map 575) — the imperative half ----------------------
 //
@@ -210,7 +211,7 @@ namespace
         if (botAI->GetState() != BOT_STATE_COMBAT)
         {
             botAI->ChangeEngine(BOT_STATE_COMBAT);
-            botAI->SetNextCheckDelay(sPlayerbotAIConfig.reactDelay);
+            botAI->SetNextCheckDelay(DcPbConfig::ReactDelay());
         }
         return true;
     }

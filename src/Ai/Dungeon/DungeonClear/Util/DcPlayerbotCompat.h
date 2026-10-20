@@ -33,7 +33,8 @@
  *   post-#2592  IsSelfBot(p)    { ai = GET_PLAYERBOT_AI(p); return ai && ai->GetMaster() == p; }
  *
  * which are the same test. No SFINAE, no version macro, no #if: there is
- * nothing to detect, so detecting it would only add a way to be wrong.
+ * nothing to detect, so detecting it would only add a way to be wrong. (The
+ * second half of this file, for the 2026-10 catch-up, is the opposite case.)
  *
  * Call these qualified (DcPlayerbotCompat::IsSelfBot(p)). Unqualified would be
  * ambiguous against the global IsSelfBot/IsRealPlayer that exist post-#2592.
@@ -83,6 +84,272 @@ namespace DcPlayerbotCompat
         return DcPlayerbotCompat::IsRealPlayer(player)
             || DcPlayerbotCompat::IsSelfBot(player);
     }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * The 2026-10 upstream catch-up: one module, two pin sets.
+ * ---------------------------------------------------------------------------
+ *
+ * Everything below DOES detect, because here the two pin sets really have no
+ * spelling in common. The old pins are the playerbots fork core plus a
+ * mod-playerbots from before #2854 / #2912; the new pins are the
+ * upstream-shaped core (fork-only hooks deleted) plus a mod-playerbots that
+ * has both. What changed, and the helper that hides it:
+ *
+ *   old pins                             new pins                    helper
+ *   -----------------------------------  --------------------------  ----------------------------
+ *   sPlayerbotAIConfig.reactDelay        .ReactDelay (#2854: every   DcPbConfig::ReactDelay() ...
+ *     (lowerCamelCase members)             member UpperCamelCase)
+ *   TargetValueExclusionType::Tank       ::TankTarget (#2912)        kTankTargetExclusions
+ *   TargetValueExclusionType::Dps        ::DpsTarget                 kDpsTargetExclusions
+ *   TargetValueExclusionType::Attacker   ::DebuffTarget              kDebuffTargetExclusions
+ *     (attacker-without-aura pool)         (same pool, renamed)
+ *   PlayerbotScript::OnPlayerbotUpdate   WorldScript::OnUpdate       WorldTickScript
+ *   PlayerbotScript::                    ServerScript::OnPacketSent  BotPacketScript
+ *     OnPlayerbotPacketSent(p, pkt*)       (session, pkt&)
+ *   Player::BotCanUseItem                Player::CanUseItem (the     CanBotUseItem
+ *                                          relic checks moved in)
+ *   new WorldSession(..., is_bot=true)   no is_bot; a null socket    NewSocketlessSession
+ *                                          already means headless
+ *   IWorld::AddQueryHolderCallback       moved off IWorld            kWorldHasQueryHolderCallback
+ *
+ * Each helper picks with a C++20 requires-expression on the type that changed
+ * (the build is C++20 on both cores), never a version macro or a CMake probe:
+ * the test is the exact member being used, so a half-synced fork still reads
+ * correctly. On the old pins every helper resolves to the very expression the
+ * call site used before, so behaviour there is unchanged.
+ *
+ * The new-pin enum adds a fourth pool, Aoe (the AoE target count). It has no
+ * old-pin equivalent and DC never excluded from it, so it stays unhandled.
+ *
+ * Delete a helper, and spell its call sites the new way, once no supported pin
+ * set needs the old spelling.
+ */
+
+#include "PlayerbotAIConfig.h"
+#include "ScriptMgr.h"
+#include "ServerScript.h"
+#include "Strategy.h"
+#include "WorldScript.h"
+#include "WorldSession.h"
+
+#include <type_traits>
+#include <utility>
+
+struct ItemTemplate;
+class WorldPacket;
+
+// Declared by the old (fork) core only. Naming it here lets the old-pin half of
+// the script adapters below spell it on the new pins too, where it stays an
+// incomplete type that nothing instantiates.
+class PlayerbotScript;
+
+// PlayerbotAIConfig members, by their new (#2854) names. Each returns a
+// reference to the live member, so a test can still assign through it.
+namespace DcPbConfig
+{
+#define DC_PB_CONFIG_MEMBER(Upper, lower)                                      \
+    namespace Detail                                                           \
+    {                                                                          \
+        template <typename C>                                                  \
+        decltype(auto) Upper(C& config)                                        \
+        {                                                                      \
+            if constexpr (requires { config.Upper; })                          \
+                return (config.Upper);                                         \
+            else                                                               \
+                return (config.lower);                                         \
+        }                                                                      \
+    }                                                                          \
+    inline decltype(auto) Upper() { return Detail::Upper(sPlayerbotAIConfig); }
+
+    DC_PB_CONFIG_MEMBER(AlmostFullHealth, almostFullHealth)
+    DC_PB_CONFIG_MEMBER(ApplyInstanceStrategies, applyInstanceStrategies)
+    DC_PB_CONFIG_MEMBER(AutoGearQualityLimit, autoGearQualityLimit)
+    DC_PB_CONFIG_MEMBER(AutoGearScoreLimit, autoGearScoreLimit)
+    DC_PB_CONFIG_MEMBER(FollowDistance, followDistance)
+    DC_PB_CONFIG_MEMBER(HealDistance, healDistance)
+    DC_PB_CONFIG_MEMBER(HighMana, highMana)
+    DC_PB_CONFIG_MEMBER(LootDistance, lootDistance)
+    DC_PB_CONFIG_MEMBER(LootGreedRollLevel, lootGreedRollLevel)
+    DC_PB_CONFIG_MEMBER(LootNeedRollLevel, lootNeedRollLevel)
+    DC_PB_CONFIG_MEMBER(MaxAddedBots, maxAddedBots)
+    DC_PB_CONFIG_MEMBER(MaxWaitForMove, maxWaitForMove)
+    DC_PB_CONFIG_MEMBER(MediumHealth, mediumHealth)
+    DC_PB_CONFIG_MEMBER(MinEnchantingBotLevel, minEnchantingBotLevel)
+    DC_PB_CONFIG_MEMBER(PassiveDelay, passiveDelay)
+    DC_PB_CONFIG_MEMBER(PremadeSpecName, premadeSpecName)
+    DC_PB_CONFIG_MEMBER(RandomBotAccounts, randomBotAccounts)
+    DC_PB_CONFIG_MEMBER(ReactDelay, reactDelay)
+    DC_PB_CONFIG_MEMBER(ReactDistance, reactDistance)
+    DC_PB_CONFIG_MEMBER(SightDistance, sightDistance)
+
+#undef DC_PB_CONFIG_MEMBER
+}
+
+namespace DcPlayerbotCompat
+{
+    namespace Detail
+    {
+        template <typename E>
+        constexpr E TankTargetExclusions()
+        {
+            if constexpr (requires { E::TankTarget; })
+                return E::TankTarget;
+            else
+                return E::Tank;
+        }
+
+        template <typename E>
+        constexpr E DpsTargetExclusions()
+        {
+            if constexpr (requires { E::DpsTarget; })
+                return E::DpsTarget;
+            else
+                return E::Dps;
+        }
+
+        template <typename E>
+        constexpr E DebuffTargetExclusions()
+        {
+            if constexpr (requires { E::DebuffTarget; })
+                return E::DebuffTarget;
+            else
+                return E::Attacker;
+        }
+
+        // The fork core's ScriptMgr still dispatches the PlayerbotScript hooks.
+        template <typename M>
+        concept HasForkTickHook = requires(M& mgr, uint32 diff) { mgr.OnPlayerbotUpdate(diff); };
+
+        template <typename M>
+        concept HasForkPacketHook = requires(M& mgr, Player* player, WorldPacket const* packet) {
+            mgr.OnPlayerbotPacketSent(player, packet);
+        };
+
+        template <typename P>
+        InventoryResult CanBotUseItem(P const* bot, ItemTemplate const* proto)
+        {
+            if constexpr (requires { bot->BotCanUseItem(proto); })
+                return bot->BotCanUseItem(proto);
+            else
+                return bot->CanUseItem(proto);
+        }
+
+        template <typename W>
+        concept HasQueryHolderCallback = requires(W& world, SQLQueryHolderCallback&& callback) {
+            world.AddQueryHolderCallback(std::move(callback));
+        };
+
+        // Every base below is a template parameter, so the half that does not
+        // apply to the core being built is never instantiated and may name
+        // hooks that core lacks.
+        template <bool Fork, typename ForkBase, typename WorldBase>
+        class WorldTickScript;
+
+        template <typename ForkBase, typename WorldBase>
+        class WorldTickScript<true, ForkBase, WorldBase> : public ForkBase
+        {
+        protected:
+            explicit WorldTickScript(char const* name) : ForkBase(name) {}
+            virtual void OnWorldTick(uint32 diff) = 0;
+
+        public:
+            void OnPlayerbotUpdate(uint32 diff) override { OnWorldTick(diff); }
+        };
+
+        template <typename ForkBase, typename WorldBase>
+        class WorldTickScript<false, ForkBase, WorldBase> : public WorldBase
+        {
+        protected:
+            explicit WorldTickScript(char const* name)
+                : WorldBase(name, { WORLDHOOK_ON_UPDATE }) {}
+            virtual void OnWorldTick(uint32 diff) = 0;
+
+        public:
+            void OnUpdate(uint32 diff) override { OnWorldTick(diff); }
+        };
+
+        template <bool Fork, typename ForkBase, typename ServerBase, typename Hooks>
+        class BotPacketScript;
+
+        template <typename ForkBase, typename ServerBase, typename Hooks>
+        class BotPacketScript<true, ForkBase, ServerBase, Hooks> : public ForkBase
+        {
+        protected:
+            explicit BotPacketScript(char const* name) : ForkBase(name) {}
+            virtual void OnBotPacketSent(Player* player, WorldPacket const& packet) = 0;
+
+        public:
+            void OnPlayerbotPacketSent(Player* player, WorldPacket const* packet) override
+            {
+                if (packet)
+                    OnBotPacketSent(player, *packet);
+            }
+        };
+
+        template <typename ForkBase, typename ServerBase, typename Hooks>
+        class BotPacketScript<false, ForkBase, ServerBase, Hooks> : public ServerBase
+        {
+        protected:
+            // Only this hook: an empty list would enable every ServerScript hook.
+            explicit BotPacketScript(char const* name)
+                : ServerBase(name, { Hooks::SERVERHOOK_ON_PACKET_SENT }) {}
+            virtual void OnBotPacketSent(Player* player, WorldPacket const& packet) = 0;
+
+        public:
+            void OnPacketSent(WorldSession* session, WorldPacket const& packet) override
+            {
+                OnBotPacketSent(session ? session->GetPlayer() : nullptr, packet);
+            }
+        };
+    }
+
+    // The three strategy target-exclusion pools DC appends to.
+    inline constexpr TargetValueExclusionType kTankTargetExclusions =
+        Detail::TankTargetExclusions<TargetValueExclusionType>();
+    inline constexpr TargetValueExclusionType kDpsTargetExclusions =
+        Detail::DpsTargetExclusions<TargetValueExclusionType>();
+    inline constexpr TargetValueExclusionType kDebuffTargetExclusions =
+        Detail::DebuffTargetExclusions<TargetValueExclusionType>();
+
+    // A global once-per-world-tick hook that fires whether or not any bot AI
+    // exists. Derive from it and override OnWorldTick(diff). On the old pins it
+    // is PlayerbotScript::OnPlayerbotUpdate, exactly as before.
+    using WorldTickScript = Detail::WorldTickScript<Detail::HasForkTickHook<ScriptMgr>,
+                                                    PlayerbotScript, WorldScript>;
+
+    // Sees every packet WorldSession::SendPacket is handed, before the
+    // socketless early return, so it is the one place a bot's packets are
+    // visible. Derive from it and override OnBotPacketSent(player, packet);
+    // player may be null. On the old pins it is
+    // PlayerbotScript::OnPlayerbotPacketSent, exactly as before.
+    using BotPacketScript = Detail::BotPacketScript<Detail::HasForkPacketHook<ScriptMgr>,
+                                                    PlayerbotScript, ServerScript, ServerHook>;
+
+    // The level-blind usability test the loot roll uses. The fork core's
+    // BotCanUseItem was CanUseItem plus the relic class checks; the new core's
+    // CanUseItem does those checks itself.
+    inline InventoryResult CanBotUseItem(Player const* bot, ItemTemplate const* proto)
+    {
+        return Detail::CanBotUseItem(bot, proto);
+    }
+
+    // A session with no socket, for a character no client drives. The fork
+    // core is told so with a trailing is_bot = true; the new core has no such
+    // argument and derives it from the null socket.
+    template <typename... Args>
+    WorldSession* NewSocketlessSession(Args&&... args)
+    {
+        if constexpr (std::is_constructible_v<WorldSession, Args&&..., bool>)
+            return new WorldSession(std::forward<Args>(args)..., true);
+        else
+            return new WorldSession(std::forward<Args>(args)...);
+    }
+
+    // Whether IWorld still declares AddQueryHolderCallback (a pure virtual a
+    // world mock has to implement on the old pins only).
+    inline constexpr bool kWorldHasQueryHolderCallback = Detail::HasQueryHolderCallback<IWorld>;
 }
 
 #endif

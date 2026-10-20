@@ -11,6 +11,7 @@
 #include "WorldScript.h"
 
 #include "DungeonQueueFill/DcDungeonQueueFillManager.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 // The one seam the RDF instant fill needs from the core: notice that a player
 // asked to join the dungeon finder.
@@ -64,18 +65,22 @@ public:
 // gets exactly one chance per proposal — the AI tick that happens to be handed
 // the packet — and a bot that misses it is silently marked DENY 40 seconds
 // later, taking the whole party's proposal down with it.
-class DungeonClearQueueFillProposalScript : public PlayerbotScript
+//
+// The fork core spells that hook PlayerbotScript::OnPlayerbotPacketSent; the
+// new core deleted PlayerbotScript and spells it ServerScript::OnPacketSent.
+// DcPlayerbotCompat::BotPacketScript picks whichever the core has.
+class DungeonClearQueueFillProposalScript : public DcPlayerbotCompat::BotPacketScript
 {
 public:
     DungeonClearQueueFillProposalScript()
-        : PlayerbotScript("DungeonClearQueueFillProposalScript") {}
+        : DcPlayerbotCompat::BotPacketScript("DungeonClearQueueFillProposalScript") {}
 
-    void OnPlayerbotPacketSent(Player* player, WorldPacket const* packet) override
+    void OnBotPacketSent(Player* player, WorldPacket const& packet) override
     {
-        if (!player || !packet || packet->GetOpcode() != SMSG_LFG_PROPOSAL_UPDATE)
+        if (!player || packet.GetOpcode() != SMSG_LFG_PROPOSAL_UPDATE)
             return;
 
-        DcDungeonQueueFillManager::Instance().OnBotProposal(player, *packet);
+        DcDungeonQueueFillManager::Instance().OnBotProposal(player, packet);
     }
 };
 

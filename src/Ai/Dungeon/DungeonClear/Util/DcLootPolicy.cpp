@@ -56,6 +56,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/NavmeshSnap.h"
 #include "Ai/Dungeon/DungeonClear/Value/DungeonClearLiveBossValue.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -69,7 +70,7 @@ namespace
         if (target.guid.IsEmpty())
             if (LootObjectStack* stack =
                     ctx->GetValue<LootObjectStack*>(DcKey::Stock::AvailableLoot)->Get())
-                target = stack->GetLoot(sPlayerbotAIConfig.lootDistance);
+                target = stack->GetLoot(DcPbConfig::LootDistance());
         return target;
     }
 }
@@ -126,7 +127,7 @@ void DcLootPolicy::GiveUpCurrentLoot(PlayerbotAI* botAI, uint32 ttlMs)
     ObjectGuid guid = ctx->GetValue<LootObject>(DcKey::Stock::LootTarget)->Get().guid;
     if (guid.IsEmpty())
         if (LootObjectStack* stack = ctx->GetValue<LootObjectStack*>(DcKey::Stock::AvailableLoot)->Get())
-            guid = stack->GetLoot(sPlayerbotAIConfig.lootDistance).guid;
+            guid = stack->GetLoot(DcPbConfig::LootDistance()).guid;
     if (guid.IsEmpty())
         return;  // nothing of our own to give up on (tank waiting on a follower)
 

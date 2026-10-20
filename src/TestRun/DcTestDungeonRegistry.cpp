@@ -17,6 +17,7 @@
 #include "TestRun/DcTestComp.h"
 #include "TestRun/DcTestGearTiers.h"
 #include "TestRun/DcTestRunRecord.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace DcTestDungeonRegistry
 {
@@ -191,9 +192,9 @@ namespace DcTestDungeonRegistry
         // default" entry, not an authority — the worldserver resolves the real
         // values when the run starts.
         s << ",\"gearDefaults\":{\"ilvl\":"
-          << (sPlayerbotAIConfig.autoGearScoreLimit > 0 ? sPlayerbotAIConfig.autoGearScoreLimit : 0)
+          << (DcPbConfig::AutoGearScoreLimit() > 0 ? DcPbConfig::AutoGearScoreLimit() : 0)
           << ",\"quality\":"
-          << (sPlayerbotAIConfig.autoGearQualityLimit > 0 ? sPlayerbotAIConfig.autoGearQualityLimit
+          << (DcPbConfig::AutoGearQualityLimit() > 0 ? DcPbConfig::AutoGearQualityLimit()
                                                           : 3)
           << "},\"qualities\":[";
         for (std::uint32_t q = 1; q <= 5; ++q)

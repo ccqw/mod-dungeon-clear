@@ -15,6 +15,7 @@
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace DcMovement
 {
@@ -207,8 +208,8 @@ namespace DcMovement
         // for the framework's other movement consumers without gating our re-issue.
         float const runSpeed = std::max(0.1f, bot->GetSpeed(MOVE_RUN));
         float delay = 1000.0f * (windowLen / runSpeed);
-        delay = std::min(delay, static_cast<float>(sPlayerbotAIConfig.maxWaitForMove));
-        delay = std::max(delay, static_cast<float>(sPlayerbotAIConfig.reactDelay));
+        delay = std::min(delay, static_cast<float>(DcPbConfig::MaxWaitForMove()));
+        delay = std::max(delay, static_cast<float>(DcPbConfig::ReactDelay()));
 
         G3D::Vector3 const& dest = pts.back();
         botAI->GetAiObjectContext()->GetValue<LastMovement&>(DcKey::Stock::LastMovement)
