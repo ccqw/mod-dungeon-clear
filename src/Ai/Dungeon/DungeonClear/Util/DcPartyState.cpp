@@ -70,6 +70,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/NavmeshSnap.h"
 #include "Ai/Dungeon/DungeonClear/Value/DungeonClearLiveBossValue.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 float DcPartyState::RestMinHpPct(Player* bot)
 {
@@ -83,7 +84,7 @@ float DcPartyState::RestMinHpPct(Player* bot)
     // 90% is our "topped up enough to pull" ceiling. Clamp it to the level bots
     // actually eat back up to (AiPlayerbot.AlmostFullHealth, default 85) so the
     // gate never waits on HP a bot won't restore on its own.
-    return std::min(90.0f, static_cast<float>(sPlayerbotAIConfig.almostFullHealth));
+    return std::min(90.0f, static_cast<float>(DcPbConfig::AlmostFullHealth()));
 }
 float DcPartyState::RestMinMpPct(Player* bot)
 {
@@ -95,7 +96,7 @@ float DcPartyState::RestMinMpPct(Player* bot)
     // 75% ceiling, clamped to the level bots actually drink back up to
     // (AiPlayerbot.HighMana, default 65). Bots stop drinking at HighMana, so a
     // higher gate would strand the tank waiting on slow natural mana regen.
-    return std::min(75.0f, static_cast<float>(sPlayerbotAIConfig.highMana));
+    return std::min(75.0f, static_cast<float>(DcPbConfig::HighMana()));
 }
 bool DcPartyState::IsSeatedHealer(Player* member)
 {

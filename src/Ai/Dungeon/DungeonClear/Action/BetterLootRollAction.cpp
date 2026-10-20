@@ -50,7 +50,7 @@ namespace
     }
 }
 
-bool DcLootRoll::IsVotablePendingRoll(Roll* roll, Player* bot)
+bool DcLootRoll::IsVotablePendingRoll(Roll const* roll, Player* bot)
 {
     if (!roll || !bot)
         return false;
@@ -77,7 +77,11 @@ bool DcLootRoll::IsVotablePendingRoll(Roll* roll, Player* bot)
     // corpse looted out from under a still-open roll window — makes
     // CountRollVote bail before it records anything, so a vote here can never
     // land and asking for one every tick is a livelock, not a retry.
-    if (Loot* loot = roll->getLoot())
+    //
+    // Roll const*: the new core's Group::GetRolls() hands out const pointers
+    // (AzerothCore #27579), and the fork core's Roll* converts to one. getLoot()
+    // is not const-qualified on either core but only reads the reference.
+    if (Loot* loot = const_cast<Roll*>(roll)->getLoot())
         if (loot->items.empty())
             return false;
 
@@ -117,7 +121,7 @@ bool DungeonClearBetterLootRollAction::Execute(Event event)
     // which erases the entry and deletes the Roll — so no Roll* may be read
     // after any vote has been cast.
     std::vector<std::pair<ObjectGuid, RollVote>> decided;
-    for (Roll* roll : group->GetRolls())
+    for (Roll const* roll : group->GetRolls())
     {
         // One predicate with the trigger — see DcLootRoll::IsVotablePendingRoll.
         // It also screens the roll CountRollVote would refuse, which this loop
@@ -144,12 +148,12 @@ bool DungeonClearBetterLootRollAction::Execute(Event event)
         // Same post-processing as stock LootRollAction::Execute.
         if (vote == NEED)
         {
-            if (sPlayerbotAIConfig.lootNeedRollLevel == 0 || RollUniqueCheck(proto, bot))
+            if (DcPbConfig::LootNeedRollLevel() == 0 || RollUniqueCheck(proto, bot))
                 vote = PASS;
-            else if (sPlayerbotAIConfig.lootNeedRollLevel == 1)
+            else if (DcPbConfig::LootNeedRollLevel() == 1)
                 vote = GREED;
         }
-        else if (vote == GREED && !sPlayerbotAIConfig.lootGreedRollLevel)
+        else if (vote == GREED && !DcPbConfig::LootGreedRollLevel())
             vote = PASS;
 
         switch (group->GetLootMethod())
@@ -188,7 +192,9 @@ bool DungeonClearBetterLootRollAction::IsFutureWearable(ItemTemplate const* prot
 
     // CanUseItem checks faction, class/race, skill and spell BEFORE level, so
     // this exact error means the level requirement is the only blocker.
-    return bot->BotCanUseItem(proto) == EQUIP_ERR_CANT_EQUIP_LEVEL_I;
+    // (BotCanUseItem on the fork core, CanUseItem on the new one; see
+    // DcPlayerbotCompat::CanBotUseItem.)
+    return DcPlayerbotCompat::CanBotUseItem(bot, proto) == EQUIP_ERR_CANT_EQUIP_LEVEL_I;
 }
 
 RollVote DungeonClearBetterLootRollAction::CalculateFutureVote(ItemTemplate const* proto, int32 randomProperty)

@@ -49,6 +49,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcCombatFlag.h"
 #include "Ai/Dungeon/DungeonClear/Util/DungeonClearTuning.h"
 #include "Ai/Dungeon/DungeonClear/Util/DungeonPathFollower.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -109,8 +110,8 @@ namespace
     // playerbots can legitimately hand us.
     uint32 EventStaleGapMs()
     {
-        uint32 const slowestTick = std::max<uint32>(sPlayerbotAIConfig.passiveDelay,
-                                                    sPlayerbotAIConfig.reactDelay * 30u);
+        uint32 const slowestTick = std::max<uint32>(DcPbConfig::PassiveDelay(),
+                                                    DcPbConfig::ReactDelay() * 30u);
         return std::max<uint32>(DC_EVENT_STALE_FLOOR_MS, slowestTick * 2u);
     }
     // How far out WaitForSpawn / KillCreature scan for the named creature.

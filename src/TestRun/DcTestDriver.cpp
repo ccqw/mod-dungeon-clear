@@ -24,6 +24,7 @@
 #include "PlayerbotAI.h"
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace DcTestDriver
 {
@@ -247,7 +248,7 @@ namespace DcTestDriver
             // The rotation logs its own accounts' characters in and out on its
             // own schedule, which would pull the driver out from under a live
             // run. Refuse rather than produce an intermittently broken harness.
-            auto const& rnd = sPlayerbotAIConfig.randomBotAccounts;
+            auto const& rnd = DcPbConfig::RandomBotAccounts();
             if (std::find(rnd.begin(), rnd.end(), accountId) != rnd.end())
             {
                 *why = "test driver account '" + account +
@@ -259,11 +260,12 @@ namespace DcTestDriver
 
             // SEC_PLAYER: the driver elevates its own session at init
             // (SetSecurity below in Tick), so the account itself never needs
-            // a GM level.
+            // a GM level. Socketless: on the fork core that is the trailing
+            // is_bot = true, on the new core the null socket alone.
             WorldSession* session =
-                new WorldSession(accountId, "", 0, nullptr, SEC_PLAYER,
+                DcPlayerbotCompat::NewSocketlessSession(accountId, "", 0, nullptr, SEC_PLAYER,
                                  EXPANSION_WRATH_OF_THE_LICH_KING, time_t(0),
-                                 LOCALE_enUS, 0, false, false, 0, true);
+                                 LOCALE_enUS, 0, false, false, 0);
 
             CharacterCreateInfo createInfo(name, RACE_HUMAN, CLASS_WARRIOR,
                                            GENDER_MALE, 0, 0, 0, 0, 0);

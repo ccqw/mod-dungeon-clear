@@ -12,6 +12,7 @@
 #include "Playerbots.h"
 #include "Ai/Dungeon/DungeonClear/Data/DcNeverTargetRegistry.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -19,7 +20,7 @@ namespace
     // next pull point in long dungeon corridors (Nexus straight runs, HoL
     // hallway, OK upper ring) while still bounded enough that the grid
     // visitor isn't crossing the whole map.
-    float FarRange() { return sPlayerbotAIConfig.sightDistance * 4.0f; }
+    float FarRange() { return DcPbConfig::SightDistance() * 4.0f; }
 }
 
 DungeonClearFarTargetsValue::DungeonClearFarTargetsValue(PlayerbotAI* botAI)

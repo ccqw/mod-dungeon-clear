@@ -70,6 +70,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/NavmeshSnap.h"
 #include "Ai/Dungeon/DungeonClear/Value/DungeonClearLiveBossValue.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -914,7 +915,7 @@ Unit* DcTargeting::FindNearestReachableHostile(
 
     // Match the cap PullRequestAction enforces — anything past this gets
     // silently rejected by the pull pipeline, so don't even consider it.
-    float const maxPullDistance = sPlayerbotAIConfig.reactDistance * 3.0f;
+    float const maxPullDistance = DcPbConfig::ReactDistance() * 3.0f;
 
     // Collect candidate hostiles from every loaded creature on the map, sort
     // by distance, then take the first one we can actually path to AND that

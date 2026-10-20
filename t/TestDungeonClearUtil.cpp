@@ -31,11 +31,25 @@
 #include "ScriptDefines/GlobalScript.h"
 #include "ScriptDefines/AllMapScript.h"
 #include "TestMap.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
-class DungeonClearWorldMock : public WorldMock
+// The fork core's IWorld declares AddQueryHolderCallback as a pure virtual the
+// core's WorldMock does not implement; the new core moved it off IWorld. So the
+// override exists only where the base still declares it.
+template <typename Base, bool = DcPlayerbotCompat::kWorldHasQueryHolderCallback>
+class DungeonClearWorldMockBase : public Base
+{
+};
+
+template <typename Base>
+class DungeonClearWorldMockBase<Base, true> : public Base
 {
 public:
     MOCK_METHOD(SQLQueryHolderCallback&, AddQueryHolderCallback, (SQLQueryHolderCallback&& callback), (override));
+};
+
+class DungeonClearWorldMock : public DungeonClearWorldMockBase<WorldMock>
+{
 };
 
 class DungeonClearTestBase : public ::testing::Test
@@ -257,35 +271,35 @@ protected:
 // Test clamping of RestMinHpPct based on almostFullHealth config
 TEST_F(DungeonClearUtilTest, RestMinHpPctClamping)
 {
-    uint32 originalValue = sPlayerbotAIConfig.almostFullHealth;
+    uint32 originalValue = DcPbConfig::AlmostFullHealth();
 
     // Below ceiling (90.0) -> should return the configured value
-    sPlayerbotAIConfig.almostFullHealth = 80;
+    DcPbConfig::AlmostFullHealth() = 80;
     EXPECT_FLOAT_EQ(DcPartyState::RestMinHpPct(), 80.0f);
 
     // Above ceiling (90.0) -> should clamp to 90.0f
-    sPlayerbotAIConfig.almostFullHealth = 95;
+    DcPbConfig::AlmostFullHealth() = 95;
     EXPECT_FLOAT_EQ(DcPartyState::RestMinHpPct(), 90.0f);
 
     // Restore
-    sPlayerbotAIConfig.almostFullHealth = originalValue;
+    DcPbConfig::AlmostFullHealth() = originalValue;
 }
 
 // Test clamping of RestMinMpPct based on highMana config
 TEST_F(DungeonClearUtilTest, RestMinMpPctClamping)
 {
-    uint32 originalValue = sPlayerbotAIConfig.highMana;
+    uint32 originalValue = DcPbConfig::HighMana();
 
     // Below ceiling (75.0) -> should return the configured value
-    sPlayerbotAIConfig.highMana = 60;
+    DcPbConfig::HighMana() = 60;
     EXPECT_FLOAT_EQ(DcPartyState::RestMinMpPct(), 60.0f);
 
     // Above ceiling (75.0) -> should clamp to 75.0f
-    sPlayerbotAIConfig.highMana = 85;
+    DcPbConfig::HighMana() = 85;
     EXPECT_FLOAT_EQ(DcPartyState::RestMinMpPct(), 75.0f);
 
     // Restore
-    sPlayerbotAIConfig.highMana = originalValue;
+    DcPbConfig::HighMana() = originalValue;
 }
 
 // Test party readiness and waiting descriptions for a solo player (no group)

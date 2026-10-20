@@ -47,6 +47,7 @@
 #include "Ai/Dungeon/DungeonClear/Settings/DcSettings.h"
 #include "Ai/Dungeon/DungeonClear/Settings/DcSettingsRegistry.h"
 #include "Ai/Dungeon/DungeonClear/Util/DungeonClearUtil.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 using namespace Acore::ChatCommands;
 
@@ -944,8 +945,8 @@ public:
         handler->SendSysMessage(Acore::StringFormat(
             "{}{} at level {} — ilvl= choices (server default is {}):", row->name,
             heroic ? " heroic" : "", level,
-            sPlayerbotAIConfig.autoGearScoreLimit > 0
-                ? std::to_string(sPlayerbotAIConfig.autoGearScoreLimit)
+            DcPbConfig::AutoGearScoreLimit() > 0
+                ? std::to_string(DcPbConfig::AutoGearScoreLimit())
                 : std::string("unlimited")));
         for (DcTestGearTiers::Choice const& choice : DcTestGearTiers::Ladder(row->mapId, level))
             handler->SendSysMessage(Acore::StringFormat("  ilvl={:<4} {}", choice.ilvl, choice.label));

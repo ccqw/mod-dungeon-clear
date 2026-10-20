@@ -12,6 +12,7 @@
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace DcBotProvisioning
 {
@@ -42,7 +43,7 @@ namespace DcBotProvisioning
         for (int pass = 0; pass < 2; ++pass)
             for (int i = 0; i < MAX_SPECNO; ++i)
             {
-                std::string const& name = sPlayerbotAIConfig.premadeSpecName[classId][i];
+                std::string const& name = DcPbConfig::PremadeSpecName()[classId][i];
                 if (name.empty())
                     break;
                 bool const hit = pass == 0 ? name == exact
@@ -98,7 +99,7 @@ namespace DcBotProvisioning
             // this second pass every spec-forced bot (i.e. every tank and healer in
             // a test run) fights with no enchants and empty sockets. Cheap relative
             // to Randomize, and it only touches what is currently equipped.
-            if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
+            if (bot->GetLevel() >= DcPbConfig::MinEnchantingBotLevel())
                 factory.ApplyEnchantAndGemsNew();
         }
         if (bot->getClass() == CLASS_HUNTER)

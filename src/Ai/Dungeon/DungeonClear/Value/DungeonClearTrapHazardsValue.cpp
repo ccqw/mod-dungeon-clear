@@ -9,13 +9,14 @@
 #include "Playerbots.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
 #include "Ai/Dungeon/DungeonClear/Data/DcHazardRegistry.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
     // Same reach as the other two hazard values: every consumer (camp anchors,
     // standoff rings, skirt legs, the vacate retreat) works within a pull's reach
     // of the bot.
-    float TrapHazardRange() { return sPlayerbotAIConfig.sightDistance; }
+    float TrapHazardRange() { return DcPbConfig::SightDistance(); }
 }
 
 DungeonClearTrapHazardsValue::DungeonClearTrapHazardsValue(PlayerbotAI* botAI)

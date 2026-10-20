@@ -40,6 +40,7 @@
 #include "TestRun/DcTestRunManager.h"
 #include "Util/DcBotProvisioning.h"
 #include "Util/DcProvisionBudget.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 using namespace lfg;
 
@@ -403,7 +404,7 @@ void DcDungeonQueueFillJob::TickPlanning()
         DcSettings::GetUInt(ObjectGuid::Empty, "DungeonQueueFill.GearIlvl"));
     spec.quality = DcSettings::GetUInt(ObjectGuid::Empty, "DungeonQueueFill.GearQuality");
     DcTestGearTiers::Resolved const gear = DcTestGearTiers::Resolve(
-        spec, sPlayerbotAIConfig.autoGearScoreLimit, sPlayerbotAIConfig.autoGearQualityLimit);
+        spec, DcPbConfig::AutoGearScoreLimit(), DcPbConfig::AutoGearQualityLimit());
     _gearIlvl = gear.ilvl;
     _gearQuality = gear.quality;
     _gearScoreLimit =

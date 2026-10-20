@@ -98,6 +98,7 @@
 #include "TestRun/DcTestDungeonRegistry.h"
 #include "TestRun/DcTestPlanManager.h"
 #include "TestRun/DcTestRunManager.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -467,13 +468,15 @@ public:
 // control to the player. OnPlayerbotUpdate is the lone playerbots-specific
 // per-tick hook that fires regardless of whether the affected player still has
 // an AI (it is a global tick, not a per-bot one), which is exactly what we need
-// since the player we must fix no longer has a bot AI.
-class DungeonClearReaperScript : public PlayerbotScript
+// since the player we must fix no longer has a bot AI. The new core deleted
+// PlayerbotScript; there the same global tick is WorldScript::OnUpdate, and
+// DcPlayerbotCompat::WorldTickScript picks whichever the core has.
+class DungeonClearReaperScript : public DcPlayerbotCompat::WorldTickScript
 {
 public:
-    DungeonClearReaperScript() : PlayerbotScript("DungeonClearReaperScript") {}
+    DungeonClearReaperScript() : DcPlayerbotCompat::WorldTickScript("DungeonClearReaperScript") {}
 
-    void OnPlayerbotUpdate(uint32 diff) override
+    void OnWorldTick(uint32 diff) override
     {
         // Re-arm the realm-wide one-PlayerbotFactory-roll-per-tick ration
         // shared by every provisioning subsystem (the `.dc test` harness and

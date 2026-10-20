@@ -10,6 +10,7 @@
 #include "Ai/Dungeon/DungeonClear/Multiplier/DungeonClearMultiplier.h"
 #include "Ai/Dungeon/DungeonClear/Strategy/DcRelevance.h"
 #include "Playerbots.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 void DungeonClearStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
@@ -662,12 +663,16 @@ void DungeonClearCombatStrategy::AppendTargetExclusions(GuidSet& exclusions,
     // holds; it is exactly wrong for an OUT-OF-ORDER boss, where a tank answering
     // a creature two rooms ahead is the thing that walks the raid there. So the
     // carve-out moved into the row (`alsoTank`) rather than staying here.
-    if (type != TargetValueExclusionType::Dps &&
-        type != TargetValueExclusionType::Attacker &&
-        type != TargetValueExclusionType::Tank)
+    //
+    // The pools are spelled through DcPlayerbotCompat: mod-playerbots #2912
+    // renamed them (DpsTarget / DebuffTarget / TankTarget) and added an Aoe
+    // pool, which DC leaves alone.
+    if (type != DcPlayerbotCompat::kDpsTargetExclusions &&
+        type != DcPlayerbotCompat::kDebuffTargetExclusions &&
+        type != DcPlayerbotCompat::kTankTargetExclusions)
         return;
 
-    bool const forTank = type == TargetValueExclusionType::Tank;
+    bool const forTank = type == DcPlayerbotCompat::kTankTargetExclusions;
 
     Player* const self = botAI ? botAI->GetBot() : nullptr;
     if (!self)

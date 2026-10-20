@@ -29,6 +29,7 @@
 #include "TestRun/DcTestRunLiveJson.h"
 #include "TestRun/DcTestRunRecord.h"
 #include "TestRun/DcTestRunSelect.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 namespace
 {
@@ -88,11 +89,11 @@ bool DcTestRunManager::Start(Player* gm, std::string const& dungeonToken,
     // as a 60s spawn timeout. Name the knob instead.
     uint32 const currentBots = GET_PLAYERBOT_MGR(gm)->GetPlayerbotsCount();
     uint32 const runSize = size ? size : static_cast<uint32>(DcTestComp::kPartySize);
-    if (sPlayerbotAIConfig.maxAddedBots > 0 &&
-        currentBots + runSize > static_cast<uint32>(sPlayerbotAIConfig.maxAddedBots))
+    if (DcPbConfig::MaxAddedBots() > 0 &&
+        currentBots + runSize > static_cast<uint32>(DcPbConfig::MaxAddedBots()))
         return fail(StartErr::BotBudget,
                     "would exceed AiPlayerbot.MaxAddedBots (" +
-                    std::to_string(sPlayerbotAIConfig.maxAddedBots) + "; " +
+                    std::to_string(DcPbConfig::MaxAddedBots()) + "; " +
                     std::to_string(currentBots) + " bots already added, this run needs " +
                     std::to_string(runSize) + ") — raise it or stop a run");
 

@@ -80,6 +80,7 @@
 #include "Playerbots.h"
 #include "DcActionShared.h"
 #include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
 
 using namespace DcActionShared;
 
@@ -477,7 +478,7 @@ bool DungeonClearEngageActionBase::EngageDirect(Unit* target)
         if (!bot->IsHostileTo(creature))
             creature->EngageWithTarget(bot);
     botAI->ChangeEngine(BOT_STATE_COMBAT);
-    botAI->SetNextCheckDelay(sPlayerbotAIConfig.reactDelay);
+    botAI->SetNextCheckDelay(DcPbConfig::ReactDelay());
     return true;
 }
 
